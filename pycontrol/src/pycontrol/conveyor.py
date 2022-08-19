@@ -1,4 +1,4 @@
-#!/usr/bin/env python
+#!/usr/bin/env python3
 #!\file
 #
 # \author  Wanqing Xia wxia612@aucklanduni.ac.nz

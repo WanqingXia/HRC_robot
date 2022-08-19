@@ -16,6 +16,8 @@ from pycontrol.gripper import Robotiq85Gripper
 from pycontrol.sensor import FT300Sensor
 from pycontrol.robot import UR5eRobot
 from pycontrol.conveyor import ConveyorBelt
+from pycontrol.camera import AzureKinectCamera
+
 
 
 if __name__ == "__main__":
@@ -23,8 +25,13 @@ if __name__ == "__main__":
     robot = UR5eRobot()
     gripper = Robotiq85Gripper()
     sensor = FT300Sensor()
-    # conveyor = ConveyorBelt()
+    conveyor = ConveyorBelt()
+    camera = AzureKinectCamera()
 
+    # send robot to home position
+    robot.go_home()
+
+    # opening gripper
     if gripper.get_stat().position < 0.075:
         success = gripper.open()
         if success:
@@ -34,46 +41,83 @@ if __name__ == "__main__":
             rospy.loginfo('Open gripper failed')
             raise Exception("Cannot open gripper")
 
-    # conveyor.go_home()
-    while True:
-        test_list =[]
-        test_list.append([-0.132, -0.297, 0.272, 0.0, -3.141, 0.0])
-        test_list.append([-0.132, -0.803, 0.478, 0.0, -3.141, 0.0])
-        test_list.append([-0.132, -0.803, 0.195, 0.0, -3.141, 0.0])
-        test_list.append([-0.132, -0.803, 0.35, 0.0, -3.141, 0.0])
-        robot.execute_cartesian_trajectory(test_list)
-        time.sleep(1)
-
-
-
-
-    pose_list = [] # move to over observing plate
+    # turn over to conveyor side
+    pose_list = []
     pose_list.append([0.297, -0.132, 0.272, 2.226, -2.217, 0.0])
     pose_list.append([-0.132, -0.297, 0.272, 0.0, -3.141, 0.0])
-
     robot.execute_cartesian_trajectory(pose_list)
 
+    # send converyor to home position
     conveyor.go_home()
 
+    # block further movement until conveyor finished moving
     while True:
         if conveyor.get_coveyor_stat().current_position < 1:
             break
         else:
             time.sleep(0.1)
 
-    dumb_list =[]
-    dumb_list.append([-0.132, -0.803, 0.478, 0.0, -3.141, 0.0])
-    robot.execute_cartesian_trajectory(dumb_list)
+    over_list =[]
+    over_list.append([-0.132, -0.803, 0.478, 0.0, -3.141, 0.0])
+    robot.execute_cartesian_trajectory(over_list)
 
-    # TODO: add machine vision code
+    count = 0
+    last_tx, last_ty, last_rot = 0, 0, 0
+
+    # only move when count > 6 (object stable for 3 seconds)
+    while count < 7:
+
+        detection = camera.get_detect()
+
+        if count == 0:
+            last_tx = detection.unpacked_tx / 1000
+            last_ty = detection.unpacked_ty / 1000
+            last_rot = detection.unpacked_rot
+
+        if detection.unpacked_rot != -100:
+            tx = detection.unpacked_tx / 1000
+            ty = detection.unpacked_ty / 1000
+            rot = detection.unpacked_rot
+
+            if np.abs(tx -last_tx) < 0.01 and np.abs(ty-last_ty) < 0.01 and np.abs(rot - last_rot) < 0.05:
+                last_tx = tx
+                last_ty = ty
+                last_rot = rot
+                current_pose = robot.get_actual_pose()
+                diag = np.sqrt((current_pose[0] + tx)**2 + (current_pose[1] + ty)**2  + current_pose[2]**2)
+                # object is too far or may collide with table
+                if diag > 0.94 or (current_pose[0]+ tx) > 0.08:
+                    count = 0
+                    rospy.loginfo("Object is beyond robot's reach")
+                else:
+                    # all check pass, plus count
+                    count += 1
+                    if count == 3:
+                        rospy.loginfo("Object stable, confirming pose...")
+            else:
+                count = 0
+                rospy.loginfo("Object is not stable")
+        else:
+            count = 0
+            rospy.loginfo("Object is not stable")
+
+        time.sleep(0.5)
 
     picking_list = [] # go to picking position
-    picking_list.append([-0.132, -0.803, 0.235, 0.0, -3.141, 0.0])
-    picking_list.append([-0.132, -0.803, 0.235, 2.223, -2.219, 0.0])
-    picking_list.append([-0.132, -0.803, 0.195, 2.223, -2.219, 0.0])
-
+    cp = robot.get_actual_pose()
+    cj = robot.get_joint_pose()
+    cj_conv = robot.joint_to_cart([cj[0], cj[1], cj[2], cj[3], cj[4], cj[5] + last_rot])
+    picking_list.append([cp[0]+ last_tx, cp[1] + last_ty, 0.2, cj_conv[3], cj_conv[4], cj_conv[5]])
     robot.execute_cartesian_trajectory(picking_list)
 
+    # picking_list = [] # go to picking position
+    # cp = robot.get_actual_pose()
+    # print(cp)
+    # picking_list.append([cp[0], cp[1], 0.195, cp[3], cp[4], cp[5]])
+    # robot.execute_cartesian_trajectory(picking_list)
+
+    
+    # close gripper
     if gripper.get_stat().position > 0.05:
         success = gripper.close()
     if success:
@@ -82,9 +126,10 @@ if __name__ == "__main__":
     else:
         rospy.loginfo('Close gripper failed')
         raise Exception("Cannot close gripper")
+    time.sleep(1)
 
     retract_list = []
-    retract_list.append([-0.132, -0.803, 0.35, 0.0, -3.141, 0.0])
+    retract_list.append([-0.132, -0.78, 0.35, 0.0, -3.141, 0.0])
     retract_list.append([-0.132, -0.297, 0.272, 0.0, -3.141, 0.0])
     retract_list.append([0.297, -0.132, 0.272, 2.226, -2.217, 0.0])
 
@@ -97,8 +142,9 @@ if __name__ == "__main__":
     robot.execute_cartesian_trajectory(handover_list)
     time.sleep(1)
 
+    # block sensor before conveyor finished moving
     while True:
-        if np.sum(np.abs(robot.get_error())) < 0.01:
+        if np.sum(np.abs(robot.get_pos_error())) < 0.01:
             if np.abs(conveyor.get_coveyor_stat().current_position - 270) < 2:
                 break
             else:
@@ -114,6 +160,7 @@ if __name__ == "__main__":
         new_reading = sensor.get_reading()
 
         if abs(new_reading.Fx - sensor_reading.Fx) > 5 or abs(new_reading.Fy - sensor_reading.Fy) > 5 or abs(new_reading.Fz - sensor_reading.Fz) > 5:
+            # open gripper
             success = gripper.open()
             if success:
                 rospy.loginfo('Successfully opened')
@@ -130,12 +177,53 @@ if __name__ == "__main__":
     observe_list.append([0.586, -0.132, 0.663, 2.227, -2.217, 0.0])
     robot.execute_cartesian_trajectory(observe_list)
 
-    # TODO: add machine vision code
+    
+    count = 0
+    last_tx, last_ty, last_rot = 0, 0, 0
 
-    pick_list = []
-    pick_list.append([0.586, -0.132, 0.095, 2.227, -2.217, 0.0])
-    robot.execute_cartesian_trajectory(pick_list)
+    # only move when count > 6 (object stable for 3 seconds)
+    while count < 7:
+        if count == 0:
+            last_tx = detection.packed_tx / 1000
+            last_ty = detection.packed_ty / 1000
+            last_rot = detection.packed_rot
+        detection = camera.get_detect()
+        if detection.packed_rot != -100:
+            tx = detection.packed_tx / 1000
+            ty = detection.packed_ty / 1000
+            rot = detection.packed_rot
+            if np.abs(tx -last_tx) < 0.01 and np.abs(ty-last_ty) < 0.01 and np.abs(rot - last_rot) < 0.05:
+                last_tx = tx
+                last_ty = ty
+                last_rot = rot
+                current_pose = robot.get_actual_pose()
+                diag = np.sqrt((current_pose[0] + tx)**2 + (current_pose[1] + ty)**2  + 0.35**2)
+                # object is too far or may collide with table
+                if diag > 0.94:
+                    count = 0
+                    rospy.loginfo("Object is beyond robot's reach")
+                else:
+                    # all check pass, plus count
+                    count += 1
+                    if count == 3:
+                        rospy.loginfo("Object stable, confirming pose...")
+            else:
+                count = 0
+                rospy.loginfo("Object is not stable")
+        else:
+            count = 0
+            rospy.loginfo("Object is not stable")
 
+        time.sleep(0.5)
+
+    picking_list = [] # go to picking position
+    cp = robot.get_actual_pose()
+    cj = robot.get_joint_pose()
+    cj_conv = robot.joint_to_cart([cj[0], cj[1], cj[2], cj[3], cj[4], cj[5] + last_rot])
+    picking_list.append([cp[0]+ last_tx, cp[1] + last_ty, 0.095, cj_conv[3], cj_conv[4], cj_conv[5]])
+    robot.execute_cartesian_trajectory(picking_list)
+
+    # close gripper
     if gripper.get_stat().position > 0.05:
         success = gripper.close()
     if success:
@@ -144,16 +232,26 @@ if __name__ == "__main__":
     else:
         rospy.loginfo('Close gripper failed')
         raise Exception("Cannot close gripper")
+    time.sleep(1)
 
     robot.go_home()
 
     conveyor.set_position(540)
+    while True:
+        if np.sum(np.abs(robot.get_pos_error())) < 0.01:
+            if np.abs(conveyor.get_coveyor_stat().current_position - 540) < 2:
+                break
+            else:
+                time.sleep(0.1)
+        else:
+            time.sleep(0.1)
 
     place_list= []
-    place_list.append([0.297, -0.132, 0.272, 2.226, -2.217, 0.0])
+    place_list.append([0.297, -0.132, 0.272, 2.217, -2.217, 0.0])
     place_list.append([0.175, 0.273, 0.272, 3.14, -0.231, 0.0])
     robot.execute_cartesian_trajectory(place_list)
 
+    # open gripper
     if gripper.get_stat().position < 0.075:
         success = gripper.open()
     if success:
@@ -164,4 +262,4 @@ if __name__ == "__main__":
         raise Exception("Cannot open gripper")
 
     robot.go_home()
-    conveyor.set_position(250)
+    conveyor.set_position(100)

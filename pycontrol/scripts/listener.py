@@ -1,4 +1,4 @@
-#!/usr/bin/env python
+#!/usr/bin/env python3
 import imp
 import rospy
 from control_msgs.msg import JointTrajectoryControllerState

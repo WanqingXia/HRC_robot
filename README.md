@@ -9,7 +9,11 @@ pip install socketIO-client
 pip install pathlib
 
 pip install paho-mqtt
+
+pip install -r requirements # for yolov5
+
 ```
+follow instructions in https://github.com/cambel/ur_ikfast # for ur_kinematics
 
 ## building
 ```bash
@@ -26,7 +30,7 @@ rosdep update
 rosdep install --from-paths src --ignore-src -y
 
 # build the workspace
-catkin_make
+catkin_make -DPYTHON_EXECUTABLE=/usr/bin/python3
 
 # activate the workspace (ie: source it)
 source devel/setup.bash
@@ -34,7 +38,7 @@ source devel/setup.bash
 
 ## run following commands in sequence
 ```bash
-catkin_make
+roslaunch yolo_run yolov5.launch
 
 roslaunch ur_robot_driver ur5e_bringup.launch
 
